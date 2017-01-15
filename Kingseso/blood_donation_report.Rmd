@@ -1,0 +1,235 @@
+---
+title: "Blood Donation Prediction"
+author: "Cecil Rivers"
+date: "Monday, January 26, 2015"
+output: html_document
+---
+
+##<b>Objective:</b>
+
+This project focuses on the development of a model that will predict blood donations.  This project is apart of a competition held by DrivenData (www.drivendata.org).  
+
+The dataset provided for this competition is from a mobile blood donation vehicle in Taiwan and supplied by the UCI Machine Learning repository.  The objective of this project is to predict whether or not a donor will give blood the next time the vehicle comes to campus.
+
+The analysis and model generation was performed in the R scripting language along with the generation of this document.
+
+##<b>Data:</b>
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+rm(list=ls(all=TRUE)) #start with empty workspace
+cat("\014")
+
+library(caret)
+library(pROC)
+library(plyr)
+library(ROCR)
+
+# rename programmatically 
+library(reshape)
+
+data <- read.table("Warm_Up_Predict_Blood_Donations_-_Traning_Data.csv",header=TRUE, sep = ",")
+test <- read.table("Warm_Up_Predict_Blood_Donations_-_Test_Data.csv",header=TRUE,sep=",")
+
+#remove index from training data
+data$X <- NULL
+
+#rename columns
+colnames(data)[1] <- "recency"
+colnames(data)[2] <- "frequency"
+colnames(data)[3] <- "volume"
+colnames(data)[4] <- "time"
+colnames(data)[5] <- "march"
+
+test_index <- test$X
+test$X <- NULL
+colnames(test)[1] <- "recency"
+colnames(test)[2] <- "frequency"
+colnames(test)[3] <- "volume"
+colnames(test)[4] <- "time"
+
+```
+
+There are two datasets provided in this competition: a training and test dataset.  The training dataset has six variables:  
+
+* Unique ID: Number which uniquely identifies the person donating blood.
+* Months since Last Donation: Number of months since this donor's most recent donation.
+* Number of Donations: Total number of donations that the donor has made.
+* Total Volume Donated: Total amount of blood that the donor has donated in cubic centimeters.
+* Months since First Donation: Number of months since the donor's first donation.
+* Made Donation in March 2007: Indication whether a person donated in March 2007.
+
+The test dataset has five features.  All the features in the test dataset are the same as the training dataset except "Made Donation in March 2007" is missing.
+
+The feature names have been shortened in order to make them easier to visualize in the R script.  Below are the feature name transformations:
+
+* Months since Last Donation -> recency
+* Number of Donations -> frequency
+* Total Volume Donated -> volume
+* Months since First Donation -> time
+* Made Donation in March 2007 -> march
+
+The unique ID has been removed from both datasets, since the prediction model should be able to predict if any donor provides a future donation based on their previous behavior, not just specific donors.
+
+<b>Analysis</b>
+
+Below is a summary of the training dataset:
+```{r,echo=FALSE,fig.cap="Figure 1. Table displaying the basic statistics of the training dataset features.",fig.align="center"}
+summary(data)
+```
+
+A scatter plot of the training dataset shows a correlation between the number of donations (frequency) and the total volume donated (volume) which seems reasonable since the more times a person donates the more blood will be collected in total.  
+
+```{r,echo=FALSE,fig.cap="Figure 2. Scatter plot of features in the blood donation training dataset.",fig.align="center"}
+plot(data)
+```
+
+The classification feature *march* (Made Donation in March 2007) shows there is a severe imbalance between between donations made and not made where the majority of the dataset weights heavily on donations not made. 
+
+```{r,echo=FALSE,fig.cap="Figure 3. Histogram showing the distribution of made donations in March 2007.",fig.align="center"}
+histogram(data$march)
+```
+
+##<b>Modeling</b>
+
+In order to determine the best model for the dataset, several models were scored using the AUC (area under the curve) based on the training dataset.  A similar technique is described by John Mount and Nina Zumel in a paper on the Revolutions website called ["How do you know if your model is going to work? Part 2: In-training set measures"](http://blog.revolutionanalytics.com/2015/09/how-do-you-know-if-your-model-is-going-to-work-part-2-in-training-set-measures.html).  In this technique, all of the training data will be used to generate a model and then the model's AUC will be calculated and compared to the AUC of other models generated using the same data.  The model with the highest AUC score will be selected as the best prediction model.
+
+The first models evaluated were simple logistic regression models like generalized linear model (glm).  Initially all predictors in the training dataset were used to get a baseline.
+
+```{r,echo=FALSE}
+glm.fit1 <- glm(march ~ recency + frequency + time + volume,data=data,family=binomial(link="logit"))
+```
+
+```{r,echo=FALSE}
+summary(glm.fit1)
+```
+
+The coefficients in the baseline glm model using all of the predictors shows that with all predictors present in the model, all predictors are significant (p-value < 0.05) except for the "Total Volume Donated" (volume) which was not defined in the model because of singularities.  These singularities point toward the correlation shown in the scatter plot between the volume and frequency variables.  To prevent the singularity, the log of the total volume donated was taken and a new glm was created.
+
+```{r,echo=FALSE}
+glm.fit2 = glm(march ~ recency + frequency + time + log(volume),data=data,family=binomial(link="logit"))
+```
+
+```{r}
+summary(glm.fit2)
+```
+
+To compare both models a receiver operating characteristic (ROC) curve is utilized in order to determine the performance of each binary classifier.
+
+```{r,echo=FALSE,fig.cap="Figure 4. Receiver Operating Characteristic Curve for all predictors vs all predictors where the log of the total volume of donations.",fig.align="center"}
+#Check area under the curve - The bigger the better
+plot.roc(data$march,fitted(glm.fit1),print.auc=TRUE)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "blue",
+         print.auc=TRUE,print.auc.y = 0.45)
+legend("bottomright", c("GLM1 = All Predictors", "GLM2 = All Predictors with log(volume)"),
+       col=c("black", "blue"), lwd=c(2,2))
+```
+
+The ROC plot shows the GLM1 (all predictors) and GLM2 (all predictors where the log of the total volume of donations is considered).  The AUC (area of the curve) is higher for GLM2 indicating it is a better model than GLM1.  
+
+Several variations of the generalized linear models were tested.  These models consist of the following: all original features plus the log(volume) (GLM3), the original GLM2 feature with the addition of a 1 (GLM4), and the GLM4 features without the frequency features (GLM5).
+
+```{r,echo=FALSE,message=FALSE,fig.cap="Figure 5. Comparison of five Generalized Linear Models.",fig.align="center"}
+glm.fit3 = glm(march ~ .*. + log(volume),data=data,family=binomial(link="logit"))
+glm.fit4 <- glm(march~1+recency+frequency+time+log(volume),data=data,family=binomial(link="logit"))
+glm.fit5 <- glm(march~1+recency+volume+time+log(volume),data=data,family=binomial(link="logit"))
+
+plot.roc(data$march,fitted(glm.fit1),print.auc=TRUE)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "blue",
+         print.auc=TRUE,print.auc.y = 0.45)
+
+plot.roc(data$march,fitted(glm.fit3),add=TRUE,col = "red",
+         print.auc=TRUE,print.auc.y = 0.55)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "purple",
+         print.auc=TRUE,print.auc.y = 0.60)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "orange",
+         print.auc=TRUE,print.auc.y = 0.65)
+
+legend("bottomright", c("GLM1", "GLM2","GLM3","GLM4","GLM5"),
+       col=c("black", "blue","red","purple","orange"), lwd=c(2,2))
+```
+
+The highest AUC was from GLM3, but that model had 3 singularities.  After removing the singularities and the predictors with p-values > 0.05, the model reduced to the predictors in GLM2 and GLM4.
+
+```{r}
+summary(glm.fit3)
+```
+
+Using the features of recency, frequency, time and log(volume) the generalized linear model was expanded to an generalized additive model (GAM).  By varying the dimension of the smooth term in the GAM, the smoothing term that generates the best AUC was discovered.
+
+```{r,echo=FALSE,warning=FALSE,fig.cap="Figure 6. AUC vs Smoothing term Dimension for GAM",fig.align="center"}
+library(gam)
+
+#try to optimize gam
+AUC <- NULL
+for (i in 1:100){
+gam.fit.trial <- gam(march~s(recency,i) + s(frequency,i) + s(time,i) + s(log(volume),i),data = data,family=binomial(link="logit"))
+AUC[i] <- auc(data$march,fitted(gam.fit.trial))
+}
+plot(AUC)
+i=which.max(AUC)
+```
+
+Taking the maximum AUC from Figure 6 yields a smooth term dimension of 56.  Figure 7 compares the previous GLM models to the GAM model using the smooth term dimension of 56.
+
+```{r,message=FALSE,warning=FALSE,fig.cap="Figure 7. Comparison of GLM vs GAM",fig.align="center"}
+gam.fit <- gam(march~s(recency,i) + s(frequency,i) + s(time,i) + s(log(volume),i),data = data,family=binomial(link="logit"))
+
+plot.roc(data$march,fitted(glm.fit1),print.auc=TRUE)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "blue",
+         print.auc=TRUE,print.auc.y = 0.45)
+
+plot.roc(data$march,fitted(glm.fit3),add=TRUE,col = "red",
+         print.auc=TRUE,print.auc.y = 0.55)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "purple",
+         print.auc=TRUE,print.auc.y = 0.60)
+
+plot.roc(data$march,fitted(glm.fit2),add=TRUE,col = "orange",
+         print.auc=TRUE,print.auc.y = 0.65)
+
+plot.roc(data$march,fitted(gam.fit),add=TRUE,col = "green",
+         print.auc=TRUE,print.auc.y = 0.70)
+
+legend("bottomright", c("GLM1", "GLM2","GLM3","GLM4","GLM5","GAM_56"),
+       col=c("black", "blue","red","purple","orange","green"), lwd=c(2,2))
+```
+
+The next model investigated was a neural network because of their ability to address complex datasets.  To build the neural network, the R package nnet was utilized.  This package can generate single hidden layer neural networks for classification or regression models where regression models were selected for the neural network.  Before the neural network was generated, the training data was normalized using R's *scale* function, then the number of units in the hidden layer was selected by running at various units in the hidden layer and using the AUC to determine which neural network provided the best performance.  The maximum number of units in the hidden layer was limited to 200 due to the amount of processing time required to generate the model.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.cap="Figure 8. Comparison of neural networks by varying number of units in hidden layer",fig.align="center"}
+library(nnet)
+maxs <- apply(data[,-length(data)], 2, max)
+mins <- apply(data[,-length(data)], 2, min)
+
+scaled <- as.data.frame(scale(data[,-length(data)], center = mins, scale = maxs - mins))
+scaled$march <- data$march
+model_nnet_10 <- nnet(march~.,data=scaled,size=10,MaxNWts=10000,linout=TRUE,maxit=10000,trace=FALSE)
+model_nnet_50 <- nnet(march~.,data=scaled,size=50,MaxNWts=10000,linout=TRUE,maxit=10000,trace=FALSE)
+model_nnet_100 <- nnet(march~.,data=scaled,size=100,MaxNWts=10000,linout=TRUE,maxit=10000,trace=FALSE)
+model_nnet_200 <- nnet(march~.,data=scaled,size=200,MaxNWts=10000,linout=TRUE,maxit=10000,trace=FALSE)
+
+plot.roc(data$march,fitted(model_nnet_10),print.auc=TRUE)
+
+plot.roc(data$march,fitted(model_nnet_50),add=TRUE,col = "blue",
+         print.auc=TRUE,print.auc.y = 0.45)
+
+plot.roc(data$march,fitted(model_nnet_100),add=TRUE,col = "red",
+         print.auc=TRUE,print.auc.y = 0.55)
+
+plot.roc(data$march,fitted(model_nnet_200),add=TRUE,col = "purple",
+         print.auc=TRUE,print.auc.y = 0.60)
+
+legend("bottomright", c("Neural Network 10 units", "Neural Network 50 units","Neural Network 100 units","Neural Network 200 units"),col=c("black", "blue","red","purple"), lwd=c(2,2))
+
+```
+
+The neural network with 200 units in the hidden layer produced the highest AUC.  This AUC was also higher than the GLM and GAM models.  As a result of the higher AUC, the neural network with 200 hidden units was trained with the complete training dataset and the predicted results from the test dataset were submitted to the DrivenData competition.
+
+<b>Conclusion</b>
+
+The blood donation competition provided several opportunities for modeling such as:  small dataset, imbalanced outcome and collinear features.  By utilizing an AUC scoring to compare various models allowed for easy selection of the model; however, determine the validity of the AUC score needs further investigation.  Another area of investigation is cross validation.  By using the method of comparing AUC of models generated from the complete training dataset, the approximation of the model's performance would not be as accurate as using cross validation on portions of the training dataset.  The third area of further investigation are alternative models that could provided better predictions such as SVM or random forest.
